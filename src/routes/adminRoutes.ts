@@ -156,8 +156,8 @@ const serviceValidation = [
     .isLength({ min: 2, max: 100 })
     .withMessage('Service name must be between 2 and 100 characters'),
   body('category')
-    .isIn(['addon', 'transport', 'food', 'yoga'])
-    .withMessage('Category must be addon, transport, food, or yoga'),
+    .isIn(['addon', 'transport', 'food', 'yoga', 'adventure'])
+    .withMessage('Category must be addon, transport, food, yoga, or adventure'),
   body('price')
     .isFloat({ min: 0 })
     .withMessage('Price must be a positive number'),
@@ -182,7 +182,7 @@ const serviceValidation = [
 const serviceQueryValidation = [
   query('category')
     .optional()
-    .isIn(['addon', 'transport', 'food', 'yoga'])
+    .isIn(['addon', 'transport', 'food', 'yoga', 'adventure'])
     .withMessage('Invalid category'),
   query('isActive')
     .optional()
@@ -226,7 +226,7 @@ const bookingQueryValidation = [
     .optional()
     .custom((value) => {
       if (!value || value === '') return true; // Allow empty strings
-      return ['room', 'yoga'].includes(value);
+      return ['room', 'yoga', 'adventure', 'transport', 'service'].includes(value);
     })
     .withMessage('Invalid booking type'),
   query('hasTransport')

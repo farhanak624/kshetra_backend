@@ -97,7 +97,11 @@ export interface IBooking extends Document {
   notes?: string;
 
   // Booking type
-  bookingType?: 'room' | 'yoga';
+  bookingType?: 'room' | 'yoga' | 'transport' | 'adventure' | 'service' | 'package';
+
+  // Additional categorization fields
+  bookingCategory?: 'accommodation' | 'activity' | 'transport' | 'mixed';
+  primaryService?: string; // For non-room bookings, identifies the main service
 
   createdAt: Date;
   updatedAt: Date;
@@ -308,7 +312,9 @@ const bookingSchema = new Schema<IBooking>(
       type: Schema.Types.ObjectId,
       ref: 'Room',
       required: function(this: IBooking) {
-        return this.bookingType !== 'yoga'; // Only required for non-yoga bookings
+        // Only required for room bookings or package bookings that include accommodation
+        return this.bookingType === 'room' ||
+               (this.bookingType === 'package' && this.bookingCategory === 'accommodation');
       }
     },
     checkIn: {
@@ -476,8 +482,28 @@ const bookingSchema = new Schema<IBooking>(
     // Booking type
     bookingType: {
       type: String,
-      enum: ['room', 'yoga'],
+      enum: ['room', 'yoga', 'transport', 'adventure', 'service', 'package'],
       default: 'room'
+    },
+
+    // Additional categorization fields
+    bookingCategory: {
+      type: String,
+      enum: ['accommodation', 'activity', 'transport', 'mixed'],
+      default: function(this: IBooking) {
+        if (this.bookingType === 'room') return 'accommodation';
+        if (this.bookingType === 'yoga' || this.bookingType === 'adventure') return 'activity';
+        if (this.bookingType === 'transport') return 'transport';
+        return 'mixed';
+      }
+    },
+
+    primaryService: {
+      type: String,
+      trim: true,
+      required: function(this: IBooking) {
+        return this.bookingType && this.bookingType !== 'room';
+      }
     }
   },
   {
@@ -499,21 +525,67 @@ bookingSchema.virtual('nights').get(function(this: IBooking) {
 
 // Pre-save middleware
 bookingSchema.pre('save', function(next) {
-  if (this.checkOut <= this.checkIn) {
+  // Only validate dates for bookings that have both check-in and check-out
+  if (this.checkIn && this.checkOut && this.checkOut <= this.checkIn) {
     const error = new Error('Check-out date must be after check-in date');
     return next(error);
   }
-  
+
   // Calculate guests count
   this.totalGuests = this.guests.length;
   this.adults = this.guests.filter(guest => !guest.isChild).length;
   this.children = this.guests.filter(guest => guest.isChild).length;
-  
+
   if (this.adults === 0) {
     const error = new Error('At least one adult is required');
     return next(error);
   }
-  
+
+  // Auto-detect booking type if not set
+  if (!this.bookingType) {
+    if (this.roomId && this.roomPrice > 0) {
+      this.bookingType = 'room';
+    } else if (this.yogaPrice > 0 || this.yogaSessionId) {
+      this.bookingType = 'yoga';
+    } else if (this.transportPrice > 0 && this.servicesPrice === 0 && !this.roomId) {
+      this.bookingType = 'transport';
+    } else if (this.selectedServices && this.selectedServices.length > 0) {
+      // Check if it's primarily adventure services
+      const hasAdventure = this.selectedServices.some((service: any) =>
+        service.serviceId && service.serviceId.toString().includes('adventure')
+      );
+      this.bookingType = hasAdventure ? 'adventure' : 'service';
+    } else {
+      this.bookingType = 'service';
+    }
+  }
+
+  // Auto-set booking category based on type
+  if (!this.bookingCategory) {
+    if (this.bookingType === 'room') this.bookingCategory = 'accommodation';
+    else if (['yoga', 'adventure'].includes(this.bookingType)) this.bookingCategory = 'activity';
+    else if (this.bookingType === 'transport') this.bookingCategory = 'transport';
+    else this.bookingCategory = 'mixed';
+  }
+
+  // Set primary service for non-room bookings
+  if (!this.primaryService && this.bookingType !== 'room') {
+    if (this.bookingType === 'transport') {
+      const services = [];
+      if (this.transport?.pickup) services.push('Airport Pickup');
+      if (this.transport?.drop) services.push('Airport Drop');
+      this.primaryService = services.join(' + ') || 'Transport Service';
+    } else if (this.bookingType === 'yoga') {
+      this.primaryService = 'Yoga Session';
+    } else if (this.bookingType === 'adventure') {
+      this.primaryService = 'Adventure Sports';
+    } else if (this.selectedServices && this.selectedServices.length > 0) {
+      this.primaryService = `${this.selectedServices.length} Service(s)`;
+    } else {
+      this.primaryService = 'Service Booking';
+    }
+  }
+
   next();
 });
 

@@ -2,7 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IService extends Document {
   name: string;
-  category: 'addon' | 'transport' | 'food' | 'yoga';
+  category: 'addon' | 'transport' | 'food' | 'yoga' | 'adventure';
   subcategory?: string;
   price: number;
   priceUnit: 'per_person' | 'per_day' | 'per_session' | 'flat_rate';
@@ -31,8 +31,8 @@ const serviceSchema = new Schema<IService>(
       type: String,
       required: [true, 'Service category is required'],
       enum: {
-        values: ['addon', 'transport', 'food', 'yoga'],
-        message: 'Category must be addon, transport, food, or yoga'
+        values: ['addon', 'transport', 'food', 'yoga', 'adventure'],
+        message: 'Category must be addon, transport, food, yoga, or adventure'
       }
     },
     subcategory: {

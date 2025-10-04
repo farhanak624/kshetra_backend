@@ -4,8 +4,10 @@
   "main": "dist/index.js",
   "scripts": {
     "start": "node dist/index.js",
+    "start:render": "cd backend && node dist/index.js",
     "dev": "nodemon src/index.ts",
     "build": "tsc",
+    "build:render": "cd backend && npm install && npm run build",
     "test": "echo \"Error: no test specified\" && exit 1",
     "setup:admin": "node scripts/setup-admin.js"
   },

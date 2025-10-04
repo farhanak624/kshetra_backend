@@ -63,12 +63,77 @@ export const createPublicBooking = async (req: any, res: Response): Promise<void
     // For public bookings, we don't have a userId, so we'll use the primary guest email as identifier
     const guestEmail = primaryGuestInfo.email;
 
-    // Check if this is a yoga booking (special case)
-    const isYogaBooking = bookingType === 'yoga' || yogaSessionId || roomId === '000000000000000000000000';
+    // Detect and set the correct booking type
+    let finalBookingType = bookingType;
+
+    // Normalize "services" to "service" for consistency
+    if (finalBookingType === 'services') {
+      finalBookingType = 'service';
+    }
+
+    let finalBookingCategory;
+    let finalPrimaryService;
+
+    if (!finalBookingType) {
+      // Auto-detect booking type based on provided data
+      if (roomId && roomId !== '000000000000000000000000' && !yogaSessionId) {
+        finalBookingType = 'room';
+        finalBookingCategory = 'accommodation';
+      } else if (yogaSessionId || roomId === '000000000000000000000000') {
+        finalBookingType = 'yoga';
+        finalBookingCategory = 'activity';
+        finalPrimaryService = 'Yoga Session';
+      } else if (transport?.pickup || transport?.drop) {
+        if (selectedServices && selectedServices.length > 0) {
+          finalBookingType = 'package';
+          finalBookingCategory = 'mixed';
+        } else {
+          finalBookingType = 'transport';
+          finalBookingCategory = 'transport';
+          const services = [];
+          if (transport.pickup) services.push('Airport Pickup');
+          if (transport.drop) services.push('Airport Drop');
+          finalPrimaryService = services.join(' + ');
+        }
+      } else if (selectedServices && selectedServices.length > 0) {
+        // Check if it's adventure sports
+        const hasAdventure = selectedServices.some(service =>
+          service.category === 'adventure' ||
+          ['surfing', 'diving', 'trekking', 'adventure'].some(keyword =>
+            service.name?.toLowerCase().includes(keyword))
+        );
+        finalBookingType = hasAdventure ? 'adventure' : 'service';
+        finalBookingCategory = 'activity';
+        finalPrimaryService = hasAdventure ? 'Adventure Sports' : 'Service Booking';
+      } else {
+        finalBookingType = 'service';
+        finalBookingCategory = 'activity';
+        finalPrimaryService = 'General Service';
+      }
+    }
+
+    const isRoomBooking = finalBookingType === 'room' ||
+                         (finalBookingType === 'package' && finalBookingCategory === 'accommodation');
+
+    // Ensure finalPrimaryService is set for all non-room bookings
+    if (!finalPrimaryService && finalBookingType !== 'room') {
+      if (finalBookingType === 'yoga') {
+        finalPrimaryService = 'Yoga Session';
+      } else if (finalBookingType === 'transport') {
+        const services = [];
+        if (transport?.pickup) services.push('Airport Pickup');
+        if (transport?.drop) services.push('Airport Drop');
+        finalPrimaryService = services.join(' + ') || 'Transport Service';
+      } else if (finalBookingType === 'adventure') {
+        finalPrimaryService = 'Adventure Sports';
+      } else {
+        finalPrimaryService = 'Service Booking';
+      }
+    }
 
     let room = null;
 
-    if (isYogaBooking) {
+    if (finalBookingType === 'yoga') {
       console.log('🧘‍♀️ Processing yoga booking...');
 
       // For yoga bookings, validate yoga session instead of room
@@ -88,8 +153,8 @@ export const createPublicBooking = async (req: any, res: Response): Promise<void
 
       // Skip room validation for yoga bookings
       console.log('✅ Yoga session validation passed');
-    } else {
-      // Regular room booking validation
+    } else if (isRoomBooking) {
+      // Room booking validation
       console.log('🏨 Processing room booking...');
 
       // Validate dates
@@ -141,11 +206,25 @@ export const createPublicBooking = async (req: any, res: Response): Promise<void
         await session.abortTransaction();
         return;
       }
+    } else {
+      // Handle non-room, non-yoga bookings (transport, adventure, service)
+      console.log(`🎯 Processing ${finalBookingType} booking...`);
+
+      // For transport/adventure/service bookings, basic validation
+      if (!checkIn || !checkOut) {
+        // Use today as default dates for service bookings
+        const today = new Date();
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        req.body.checkIn = req.body.checkIn || today;
+        req.body.checkOut = req.body.checkOut || tomorrow;
+      }
     }
 
     // Calculate pricing
     let pricing;
-    if (isYogaBooking) {
+    if (finalBookingType === 'yoga') {
       // For yoga bookings, use simple pricing from totalAmount in request
       pricing = {
         totalAmount: req.body.totalAmount || 0,
@@ -156,8 +235,8 @@ export const createPublicBooking = async (req: any, res: Response): Promise<void
         transportPrice: 0,
         yogaPrice: req.body.totalAmount || 0
       };
-    } else {
-      // Regular room booking pricing
+    } else if (isRoomBooking) {
+      // Room booking pricing
       if (!room) {
         throw new Error('Room is required for room bookings');
       }
@@ -173,6 +252,20 @@ export const createPublicBooking = async (req: any, res: Response): Promise<void
         0,
         0
       );
+    } else {
+      // For transport/adventure/service bookings
+      const transportPrice = transport?.pickup || transport?.drop ?
+        pricingCalculator.calculateTransportPrice(transport.pickup, transport.drop) : 0;
+
+      pricing = {
+        totalAmount: req.body.totalAmount || transportPrice || 0,
+        roomPrice: 0,
+        foodPrice: 0,
+        breakfastPrice: 0,
+        servicesPrice: req.body.totalAmount && !transportPrice ? req.body.totalAmount : 0,
+        transportPrice: transportPrice,
+        yogaPrice: 0
+      };
     }
 
     // Process coupon if provided
@@ -194,8 +287,10 @@ export const createPublicBooking = async (req: any, res: Response): Promise<void
 
       // Determine service type for coupon validation
       let serviceType = 'airport'; // default
-      if (isYogaBooking) {
+      if (finalBookingType === 'yoga') {
         serviceType = 'yoga';
+      } else if (finalBookingType === 'adventure') {
+        serviceType = 'adventure';
       } else if (transport?.pickup || transport?.drop) {
         serviceType = 'airport';
       }
@@ -235,21 +330,21 @@ export const createPublicBooking = async (req: any, res: Response): Promise<void
 
     // Create booking for public user (no userId)
     const booking = new Booking({
-      roomId: isYogaBooking ? null : roomId, // No room for yoga bookings
+      roomId: isRoomBooking ? roomId : null,
       userId: null, // No user account for public bookings
       guestEmail, // Store guest email for identification
-      checkIn: new Date(checkIn),
-      checkOut: new Date(checkOut),
+      checkIn: new Date(req.body.checkIn),
+      checkOut: new Date(req.body.checkOut),
       guests: guests.map((guest: any) => ({
         name: guest.name,
         age: parseInt(guest.age),
         isChild: parseInt(guest.age) < 5,
         gender: guest.gender,
-        // Only include ID fields for room bookings, not yoga bookings
-        ...(isYogaBooking ? {} : {
+        // Only include ID fields for room bookings
+        ...(isRoomBooking ? {
           idType: guest.idType,
           idNumber: guest.idNumber
-        })
+        } : {})
       })),
       primaryGuestInfo,
       totalGuests: guests.length,
@@ -268,12 +363,15 @@ export const createPublicBooking = async (req: any, res: Response): Promise<void
       includeFood,
       includeBreakfast,
       transport,
+      selectedServices: selectedServices || [],
       specialRequests: specialRequests || '',
       status: 'pending',
       paymentStatus: 'pending',
-      // Add yoga-specific fields
+      // New booking type fields
       yogaSessionId: yogaSessionId || null,
-      bookingType: isYogaBooking ? 'yoga' : 'room'
+      bookingType: finalBookingType,
+      bookingCategory: finalBookingCategory,
+      primaryService: finalPrimaryService || (finalBookingType !== 'room' ? 'Service Booking' : undefined)
     });
 
     await booking.save({ session });

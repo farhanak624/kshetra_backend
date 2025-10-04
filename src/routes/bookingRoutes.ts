@@ -18,13 +18,23 @@ const router = express.Router();
 const createBookingValidation = [
   body('roomId')
     .custom((value, { req }) => {
-      // Skip roomId validation for yoga bookings
-      if (req.body.bookingType === 'yoga' || req.body.yogaSessionId || value === '000000000000000000000000') {
+      const bookingType = req.body.bookingType;
+
+      // Skip roomId validation for non-room bookings
+      if (['yoga', 'transport', 'adventure', 'service'].includes(bookingType) ||
+          req.body.yogaSessionId ||
+          value === '000000000000000000000000') {
         return true;
       }
-      if (!value || !mongoose.isValidObjectId(value)) {
-        throw new Error('Valid room ID is required for room bookings');
+
+      // Require roomId for room bookings and package bookings with accommodation
+      if (bookingType === 'room' ||
+          (bookingType === 'package' && req.body.bookingCategory === 'accommodation')) {
+        if (!value || !mongoose.isValidObjectId(value)) {
+          throw new Error('Valid room ID is required for room bookings');
+        }
       }
+
       return true;
     }),
   body('checkIn')
@@ -116,7 +126,15 @@ const createBookingValidation = [
     .optional()
     .trim()
     .isLength({ max: 500 })
-    .withMessage('Special requests cannot exceed 500 characters')
+    .withMessage('Special requests cannot exceed 500 characters'),
+  body('bookingType')
+    .optional()
+    .isIn(['room', 'yoga', 'transport', 'adventure', 'service', 'services', 'package'])
+    .withMessage('Invalid booking type'),
+  body('bookingCategory')
+    .optional()
+    .isIn(['accommodation', 'activity', 'transport', 'mixed'])
+    .withMessage('Invalid booking category')
 ];
 
 const getBookingsValidation = [

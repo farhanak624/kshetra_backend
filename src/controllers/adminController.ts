@@ -353,7 +353,75 @@ export const getAllBookings = async (req: AuthenticatedRequest, res: Response): 
     const query: any = {};
     if (status) query.status = status;
     if (paymentStatus) query.paymentStatus = paymentStatus;
-    if (bookingType) query.bookingType = bookingType;
+
+    // Handle booking type filters with intelligent detection
+    if (bookingType) {
+      if (bookingType === 'adventure') {
+        // For adventure sports, we need to look at multiple sources:
+        // 1. Direct bookingType: 'adventure'
+        // 2. Services with adventure category (via lookup)
+        // 3. Special requests containing adventure keywords (fallback for null serviceIds)
+        const adventureBookings = await Booking.aggregate([
+          {
+            $lookup: {
+              from: 'services',
+              localField: 'selectedServices.serviceId',
+              foreignField: '_id',
+              as: 'serviceDetails'
+            }
+          },
+          {
+            $match: {
+              $or: [
+                { bookingType: 'adventure' },
+                {
+                  'serviceDetails.category': 'adventure'
+                },
+                {
+                  'serviceDetails.name': {
+                    $regex: /surfing|diving|trekking|adventure|kayak/i
+                  }
+                },
+                // Fallback: Check special requests for adventure keywords (exclude transport)
+                {
+                  $and: [
+                    {
+                      specialRequests: {
+                        $regex: /surfing|diving|trekking|adventure|kayak|wildlife/i
+                      }
+                    },
+                    {
+                      specialRequests: {
+                        $not: { $regex: /airport|transport|pickup|drop/i }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          { $project: { _id: 1 } }
+        ]);
+
+        const adventureIds = adventureBookings.map(b => b._id);
+        query._id = { $in: adventureIds };
+      } else if (bookingType === 'transport') {
+        // Transport-only bookings
+        query.$or = [
+          { bookingType: 'transport' },
+          {
+            $and: [
+              { transportPrice: { $gt: 0 } },
+              { roomPrice: { $eq: 0 } },
+              { servicesPrice: { $eq: 0 } },
+              { yogaPrice: { $eq: 0 } }
+            ]
+          }
+        ];
+      } else {
+        query.bookingType = bookingType;
+      }
+    }
 
     // Filter by transport
     if (hasTransport) {
@@ -446,9 +514,8 @@ export const getAllBookings = async (req: AuthenticatedRequest, res: Response): 
         .skip(skip)
         .limit(Number(limit));
 
-      // Update total count for search
-      const total = await Booking.countDocuments(searchQuery);
       const bookings = await bookingsQuery;
+      const total = await Booking.countDocuments(searchQuery);
 
       res.json({
         success: true,
